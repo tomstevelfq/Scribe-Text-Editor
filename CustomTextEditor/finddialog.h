@@ -32,9 +32,6 @@ public slots:
 
 private:
 
-    void initializeWidgets();
-    void initializeLayout();
-
     QLabel *findLabel;
     QLabel *replaceLabel;
     QPushButton *findNextButton;

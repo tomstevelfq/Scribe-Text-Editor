@@ -12,7 +12,7 @@
   </property>
   <property name="minimumSize">
    <size>
-    <width>530</width>
+    <width>500</width>
     <height>230</height>
    </size>
   </property>
@@ -93,7 +93,6 @@
      <string>View</string>
     </property>
     <addaction name="actionStatus_Bar"/>
-    <addaction name="actionTool_Bar"/>
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuEdit"/>
@@ -373,17 +372,6 @@
    </property>
    <property name="text">
     <string>Python</string>
-   </property>
-  </action>
-  <action name="actionTool_Bar">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>Tool Bar</string>
    </property>
   </action>
  </widget>

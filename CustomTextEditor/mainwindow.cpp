@@ -1,14 +1,12 @@
 #include "mainwindow.h"
 #include "utilityfunctions.h"
 #include "ui_mainwindow.h"
-#include "settings.h"                   // storing app state
 #include <QtDebug>
 #include <QtPrintSupport/QPrinter>      // printing
 #include <QtPrintSupport/QPrintDialog>  // printing
 #include <QFileDialog>                  // file open/save dialogs
 #include <QFile>                        // file descriptors, IO
 #include <QTextStream>                  // file IO
-#include <QStandardPaths>               // default open directory
 #include <QDateTime>                    // current time
 #include <QApplication>                 // quit
 #include <QShortcut>
@@ -19,7 +17,8 @@
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
-    readSettings();
+
+    mapMenuLanguageOptionToLanguageType();
 
     // Used to ensure that only one language can ever be checked at a time
     languageGroup = new QActionGroup(this);
@@ -29,8 +28,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     languageGroup->addAction(ui->actionJava_Lang);
     languageGroup->addAction(ui->actionPython_Lang);
     connect(languageGroup, SIGNAL(triggered(QAction*)), this, SLOT(on_languageSelected(QAction*)));
-    // Language label frame
-    setupLanguageOnStatusBar();
 
     // Set up the find dialog
     findDialog = new FindDialog();
@@ -44,68 +41,23 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     tabbedEditor = ui->tabWidget;
     tabbedEditor->setTabsClosable(true);
 
-    // Add metric reporter and simulate a tab switch
-    metricReporter = new MetricReporter();
-    ui->statusBar->addPermanentWidget(metricReporter);
-    on_currentTabChanged(0);
+    initializeStatusBarLabels();
+    on_currentTab_changed(0);
 
     // Connect tabbedEditor's signals to their handlers
-    connect(tabbedEditor, SIGNAL(currentChanged(int)), this, SLOT(on_currentTabChanged(int)));
+    connect(tabbedEditor, SIGNAL(currentChanged(int)), this, SLOT(on_currentTab_changed(int)));
     connect(tabbedEditor, SIGNAL(tabCloseRequested(int)), this, SLOT(closeTab(int)));
 
     // Connect action signals to their handlers
-    connect(ui->actionSave, SIGNAL(triggered()), this, SLOT(on_actionSaveTriggered()));
-    connect(ui->actionSave_As, SIGNAL(triggered()), this, SLOT(on_actionSaveTriggered()));
+    connect(ui->actionSave, SIGNAL(triggered()), this, SLOT(on_actionSave_or_actionSaveAs_triggered()));
+    connect(ui->actionSave_As, SIGNAL(triggered()), this, SLOT(on_actionSave_or_actionSaveAs_triggered()));
     connect(ui->actionReplace, SIGNAL(triggered()), this, SLOT(on_actionFind_triggered()));
 
     // Have to add this shortcut manually because we can't define it via the GUI editor
     QShortcut *tabCloseShortcut = new QShortcut(QKeySequence("Ctrl+W"), this);
     QObject::connect(tabCloseShortcut, SIGNAL(activated()), this, SLOT(closeTabShortcut()));
 
-    // For word wrap and auto indent
-    matchFormatOptionsToEditorDefaults();
-
-    mapMenuLanguageOptionToLanguageType();
     mapFileExtensionsToLanguages();
-    appendShortcutsToToolbarTooltips();
-}
-
-
-/* Ensures that the checkable formatting menu options, like auto indent
- * and word wrap, match the previously saved defaults for the Editor class.
- * See constructor for usage.
- */
-void MainWindow::matchFormatOptionsToEditorDefaults()
-{
-    QAction *autoIndent = ui->actionAuto_Indent;
-    editor->autoIndentEnabled ? autoIndent->setChecked(true) : autoIndent->setChecked(false);
-
-    QAction *wordWrap = ui->actionWord_Wrap;
-    editor->lineWrapMode ? wordWrap->setChecked(true) : wordWrap->setChecked(false);
-}
-
-
-/* Updates the Format menu options (e.g., Word wrap, Auto indent) to match
- * the settings of the currently selected editor. See onCurrentTabChanged for usage.
- */
-void MainWindow::updateFormatMenuOptions()
-{
-    ui->actionWord_Wrap->setChecked(editor->textIsWrapped());
-    ui->actionAuto_Indent->setChecked(editor->textIsAutoIndented());
-}
-
-
-/* Initializes the language label and adds it to a frame
- * that gets set as a widget on the far left of the status bar.
- */
-void MainWindow::setupLanguageOnStatusBar()
-{
-    languageLabel = new QLabel("Language: not selected");
-    QFrame *langFrame = new QFrame();
-    QHBoxLayout *langLayout = new QHBoxLayout();
-    langLayout->addWidget(languageLabel);
-    langFrame->setLayout(langLayout);
-    ui->statusBar->addWidget(langFrame);
 }
 
 
@@ -133,20 +85,17 @@ void MainWindow::mapFileExtensionsToLanguages()
 }
 
 
-void MainWindow::appendShortcutsToToolbarTooltips()
-{
-    for (QAction* action : ui->mainToolBar->actions())
-    {
-        QString tooltip = action->toolTip() + " (" + action->shortcut().toString() + ")";
-        action->setToolTip(tooltip);
-    }
-}
-
 /* Performs all necessary memory cleanup operations on dynamically allocated objects.
  */
 MainWindow::~MainWindow()
 {
     delete languageLabel;
+    delete wordLabel;
+    delete wordCountLabel;
+    delete charLabel;
+    delete charCountLabel;
+    delete columnCountLabel;
+    delete columnLabel;
     delete languageGroup;
     delete ui;
 }
@@ -163,35 +112,35 @@ void MainWindow::on_languageSelected(QAction* languageAction)
 
 
 /* Given a Language enum, this function checks the corresponding radio option from the Format > Language
- * menu. Used by on_currentTabChanged to reflect the current tab's selected language.
+ * menu. Used by on_currentTab_changed to reflect the current tab's selected language.
  */
 void MainWindow::triggerCorrespondingMenuLanguageOption(Language lang)
 {
-    switch (lang)
+    switch(lang)
     {
-        case (Language::C):
-            if (!ui->actionC_Lang->isChecked())
+        case(Language::C):
+            if(!ui->actionC_Lang->isChecked())
             {
                 ui->actionC_Lang->trigger();
             }
             break;
 
-        case (Language::CPP):
-            if (!ui->actionCPP_Lang->isChecked())
+        case(Language::CPP):
+            if(!ui->actionCPP_Lang->isChecked())
             {
                 ui->actionCPP_Lang->trigger();
             }
             break;
 
-        case (Language::Java):
-            if (!ui->actionJava_Lang->isChecked())
+        case(Language::Java):
+            if(!ui->actionJava_Lang->isChecked())
             {
                 ui->actionJava_Lang->trigger();
             }
             break;
 
-        case (Language::Python):
-            if (!ui->actionPython_Lang->isChecked())
+        case(Language::Python):
+            if(!ui->actionPython_Lang->isChecked())
             {
                 ui->actionPython_Lang->trigger();
             }
@@ -211,7 +160,7 @@ void MainWindow::setLanguageFromExtension()
     QString fileName = editor->getFileName();
     int indexOfDot = fileName.indexOf('.');
 
-    if (indexOfDot == -1)
+    if(indexOfDot == -1)
     {
         selectProgrammingLanguage(Language::None);
         return;
@@ -221,7 +170,7 @@ void MainWindow::setLanguageFromExtension()
 
     bool extensionSupported = extensionToLanguageMap.find(fileExtension) != extensionToLanguageMap.end();
 
-    if (!extensionSupported)
+    if(!extensionSupported)
     {
         selectProgrammingLanguage(Language::None);
         return;
@@ -236,7 +185,7 @@ void MainWindow::setLanguageFromExtension()
  */
 void MainWindow::selectProgrammingLanguage(Language language)
 {
-    if (language == editor->getProgrammingLanguage())
+    if(language == editor->getProgrammingLanguage())
     {
         return;
     }
@@ -258,13 +207,6 @@ void MainWindow::disconnectEditorDependentSignals()
     disconnect(gotoDialog, SIGNAL(gotoLine(int)), editor, SLOT(goTo(int)));
     disconnect(editor, SIGNAL(findResultReady(QString)), findDialog, SLOT(onFindResultReady(QString)));
     disconnect(editor, SIGNAL(gotoResultReady(QString)), gotoDialog, SLOT(onGotoResultReady(QString)));
-
-    disconnect(editor, SIGNAL(wordCountChanged(int)), metricReporter, SLOT(updateWordCount(int)));
-    disconnect(editor, SIGNAL(charCountChanged(int)), metricReporter, SLOT(updateCharCount(int)));
-    disconnect(editor, SIGNAL(lineCountChanged(int, int)), metricReporter, SLOT(updateLineCount(int, int)));
-    disconnect(editor, SIGNAL(columnCountChanged(int)), metricReporter, SLOT(updateColumnCount(int)));
-    disconnect(editor, SIGNAL(fileContentsChanged()), this, SLOT(updateTabAndWindowTitle()));
-
     disconnect(editor, SIGNAL(undoAvailable(bool)), this, SLOT(toggleUndo(bool)));
     disconnect(editor, SIGNAL(redoAvailable(bool)), this, SLOT(toggleRedo(bool)));
     disconnect(editor, SIGNAL(copyAvailable(bool)), this, SLOT(toggleCopyAndCut(bool)));
@@ -276,57 +218,59 @@ void MainWindow::disconnectEditorDependentSignals()
  */
 void MainWindow::reconnectEditorDependentSignals()
 {
+    // Reconnect editor signals
+    connect(editor, SIGNAL(columnCountChanged(int)), this, SLOT(updateColumnCount(int)));
+    connect(editor, SIGNAL(windowNeedsToBeUpdated(DocumentMetrics)), this, SLOT(updateWordAndCharCount(DocumentMetrics)));
+    connect(editor, SIGNAL(windowNeedsToBeUpdated(DocumentMetrics)), this, SLOT(updateTabAndWindowTitle()));
+    connect(editor, SIGNAL(findResultReady(QString)), findDialog, SLOT(onFindResultReady(QString)));
+    connect(editor, SIGNAL(gotoResultReady(QString)), gotoDialog, SLOT(onGotoResultReady(QString)));
+    connect(editor, SIGNAL(undoAvailable(bool)), this, SLOT(toggleUndo(bool)));
+    connect(editor, SIGNAL(redoAvailable(bool)), this, SLOT(toggleRedo(bool)));
+    connect(editor, SIGNAL(copyAvailable(bool)), this, SLOT(toggleCopyAndCut(bool)));
+
+    // Reconnect find/goto signals and slots to the current editor
     connect(findDialog, SIGNAL(startFinding(QString, bool, bool)), editor, SLOT(find(QString, bool, bool)));
     connect(findDialog, SIGNAL(startReplacing(QString, QString, bool, bool)), editor, SLOT(replace(QString, QString, bool, bool)));
     connect(findDialog, SIGNAL(startReplacingAll(QString, QString, bool, bool)), editor, SLOT(replaceAll(QString, QString, bool, bool)));
     connect(gotoDialog, SIGNAL(gotoLine(int)), editor, SLOT(goTo(int)));
-    connect(editor, SIGNAL(findResultReady(QString)), findDialog, SLOT(onFindResultReady(QString)));
-    connect(editor, SIGNAL(gotoResultReady(QString)), gotoDialog, SLOT(onGotoResultReady(QString)));
 
-    connect(editor, SIGNAL(wordCountChanged(int)), metricReporter, SLOT(updateWordCount(int)));
-    connect(editor, SIGNAL(charCountChanged(int)), metricReporter, SLOT(updateCharCount(int)));
-    connect(editor, SIGNAL(lineCountChanged(int, int)), metricReporter, SLOT(updateLineCount(int, int)));
-    connect(editor, SIGNAL(columnCountChanged(int)), metricReporter, SLOT(updateColumnCount(int)));
-    connect(editor, SIGNAL(fileContentsChanged()), this, SLOT(updateTabAndWindowTitle()));
-
-    connect(editor, SIGNAL(undoAvailable(bool)), this, SLOT(toggleUndo(bool)));
-    connect(editor, SIGNAL(redoAvailable(bool)), this, SLOT(toggleRedo(bool)));
-    connect(editor, SIGNAL(copyAvailable(bool)), this, SLOT(toggleCopyAndCut(bool)));
 }
+
 
 
 /* Called each time the current tab changes in the tabbed editor. Sets the main window's current editor,
  * reconnects any relevant signals, and updates the window.
  */
-void MainWindow::on_currentTabChanged(int index)
+void MainWindow::on_currentTab_changed(int index)
 {
     // Happens when the tabbed editor's last tab is closed
-    if (index == -1)
+    if(index == -1)
     {
         return;
     }
 
     // Note: editor will only be nullptr on the first launch, so this will get skipped in that edge case
-    if (editor != nullptr)
+    if(editor != nullptr)
     {
+        // Disconnect for previous active editor
         disconnectEditorDependentSignals();
     }
 
-    editor = tabbedEditor->currentTab();
-    reconnectEditorDependentSignals();
+    // Set the internal editor to the currently tabbed one
+    editor = qobject_cast<Editor*>(tabbedEditor->widget(index));
     editor->setFocus(Qt::FocusReason::TabFocusReason);
 
     Language tabLanguage = editor->getProgrammingLanguage();
 
     // If this tab had a programming language set, trigger the corresponding option
-    if (tabLanguage != Language::None)
+    if(tabLanguage != Language::None)
     {
         triggerCorrespondingMenuLanguageOption(tabLanguage);
     }
     else
     {        
         // If a menu language is checked but the current tab has no language set, uncheck the menu option
-        if (languageGroup->checkedAction())
+        if(languageGroup->checkedAction())
         {
             languageGroup->checkedAction()->setChecked(false);
         }
@@ -340,16 +284,35 @@ void MainWindow::on_currentTabChanged(int index)
     toggleUndo(editor->undoAvailable());
     toggleCopyAndCut(editor->textCursor().hasSelection());
 
-    updateFormatMenuOptions();
+    reconnectEditorDependentSignals();
 
-
-    // We need to update this information manually for tab changes
+    // This info only gets passed on by Editor when its contents change, not when a new tab is added to TabbedEditor
     DocumentMetrics metrics = editor->getDocumentMetrics();
+    updateWordAndCharCount(metrics);
     updateTabAndWindowTitle();
-    metricReporter->updateWordCount(metrics.wordCount);
-    metricReporter->updateCharCount(metrics.charCount);
-    metricReporter->updateLineCount(metrics.currentLine, metrics.totalLines);
-    metricReporter->updateColumnCount(metrics.currentColumn);
+    updateColumnCount(metrics.currentColumn);
+}
+
+
+/* Initializes the status bar labels and adds them as permanent
+ * widgets to the status bar of the main application window.
+ */
+void MainWindow::initializeStatusBarLabels()
+{
+    languageLabel = new QLabel("Language: not selected");
+    wordLabel = new QLabel("Words: ");
+    wordCountLabel = new QLabel();
+    charLabel = new QLabel("Chars: ");
+    charCountLabel = new QLabel();
+    columnLabel = new QLabel("Column: ");
+    columnCountLabel = new QLabel();
+    ui->statusBar->addWidget(languageLabel);
+    ui->statusBar->addPermanentWidget(wordLabel);
+    ui->statusBar->addPermanentWidget(wordCountLabel);
+    ui->statusBar->addPermanentWidget(charLabel);
+    ui->statusBar->addPermanentWidget(charCountLabel);
+    ui->statusBar->addPermanentWidget(columnLabel);
+    ui->statusBar->addPermanentWidget(columnCountLabel);
 }
 
 
@@ -357,7 +320,7 @@ void MainWindow::on_currentTabChanged(int index)
  */
 void MainWindow::launchFindDialog()
 {
-    if (findDialog->isHidden())
+    if(findDialog->isHidden())
     {
         findDialog->show();
         findDialog->activateWindow();
@@ -371,7 +334,7 @@ void MainWindow::launchFindDialog()
  */
 void MainWindow::launchGotoDialog()
 {
-    if (gotoDialog->isHidden())
+    if(gotoDialog->isHidden())
     {
         gotoDialog->show();
         gotoDialog->activateWindow();
@@ -386,17 +349,24 @@ void MainWindow::launchGotoDialog()
  */
 void MainWindow::updateTabAndWindowTitle()
 {
-    QString tabTitle = editor->getFileName();
-    QString windowTitle = tabTitle;
+    QString fileName = editor->getFileName();
+    bool editorUnsaved = editor->isUnsaved();
 
-    if (editor->isUnsaved())
-    {
-        tabTitle += " *";
-        windowTitle += " [Unsaved]";
-    }
+    tabbedEditor->setTabText(tabbedEditor->currentIndex(), fileName + (editorUnsaved ? " *" : ""));
+    setWindowTitle(fileName + (editorUnsaved ? " [Unsaved]" : ""));
+}
 
-    tabbedEditor->setTabText(tabbedEditor->currentIndex(), tabTitle);
-    setWindowTitle(windowTitle + " - Scribe");
+
+/* Updates the window and status bar labels to reflect the most up-to-date word and char counts.
+ * Note: updating the column count is handled separately. See updateColumnCount in mainwindow.h.
+ */
+void MainWindow::updateWordAndCharCount(DocumentMetrics metrics)
+{
+    QString wordText = QString::number(metrics.wordCount) + tr("   ");
+    QString charText = QString::number(metrics.charCount) + tr("   ");
+
+    wordCountLabel->setText(wordText);
+    charCountLabel->setText(charText);
 }
 
 
@@ -418,6 +388,8 @@ QMessageBox::StandardButton MainWindow::askUserToSave()
 void MainWindow::on_actionNew_triggered()
 {
     tabbedEditor->add(new Editor());
+    editor->toggleWrapMode(ui->actionWord_Wrap->isChecked());
+    editor->toggleAutoIndent(ui->actionAuto_Indent->isChecked());
 }
 
 
@@ -427,13 +399,13 @@ void MainWindow::on_actionNew_triggered()
  * user chose Save As, the program prompts the user to specify a name and directory for the file.
  * Returns true if the file was saved and false otherwise.
  */
-bool MainWindow::on_actionSaveTriggered()
+bool MainWindow::on_actionSave_or_actionSaveAs_triggered()
 {
     bool saveAs = sender() == ui->actionSave_As;
     QString currentFilePath = editor->getCurrentFilePath();
 
     // If user hit Save As or user hit Save but current document was never saved to disk
-    if (saveAs || currentFilePath.isEmpty())
+    if(saveAs || currentFilePath.isEmpty())
     {
         // Title to be used for saving dialog
         QString saveDialogWindowTitle = saveAs ? tr("Save As") : tr("Save");
@@ -442,7 +414,7 @@ bool MainWindow::on_actionSaveTriggered()
         QString filePath = QFileDialog::getSaveFileName(this, saveDialogWindowTitle);
 
         // Don't do anything if the user changes their mind and hits Cancel
-        if (filePath.isNull())
+        if(filePath.isNull())
         {
             return false;
         }
@@ -481,33 +453,19 @@ bool MainWindow::on_actionSaveTriggered()
  */
 void MainWindow::on_actionOpen_triggered()
 {
-    // Used to switch to a new tab if there's already an open doc
     bool openInCurrentTab = editor->isUntitled() && !editor->isUnsaved();
 
-    QString openedFilePath;
-    QString lastUsedDirectory = settings->value(DEFAULT_DIRECTORY_KEY).toString();
-
-    if (lastUsedDirectory.isEmpty())
-    {
-        openedFilePath = QFileDialog::getOpenFileName(this, tr("Open"), DEFAULT_DIRECTORY);
-    }
-    else
-    {
-        openedFilePath = QFileDialog::getOpenFileName(this, tr("Open"), lastUsedDirectory);
-    }
+    // Ask the user to specify the name of the file
+    QString filePath = QFileDialog::getOpenFileName(this, tr("Open"));
 
     // Don't do anything if the user hit Cancel
-    if (openedFilePath.isNull())
+    if(filePath.isNull())
     {
         return;
     }
 
-    // Update the recently used directory
-    QDir currentDirectory;
-    settings->setValue(DEFAULT_DIRECTORY_KEY, currentDirectory.absoluteFilePath(openedFilePath));
-
     // Attempt to create a file descriptor for the file at the given path
-    QFile file(openedFilePath);
+    QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QFile::Text))
     {
         QMessageBox::warning(this, "Warning", "Cannot save file: " + file.errorString());
@@ -518,11 +476,11 @@ void MainWindow::on_actionOpen_triggered()
     QTextStream in(&file);
     QString documentContents = in.readAll();
 
-    if (!openInCurrentTab)
+    if(!openInCurrentTab)
     {
         tabbedEditor->add(new Editor());
     }
-    editor->setCurrentFilePath(openedFilePath);
+    editor->setCurrentFilePath(filePath);
     editor->setPlainText(documentContents);
     file.close();
 
@@ -541,7 +499,7 @@ void MainWindow::on_actionPrint_triggered()
     printer.setPrinterName(tr("Document printer"));
     QPrintDialog printDialog(&printer, this);
 
-    if (printDialog.exec() != QPrintDialog::Rejected)
+    if(printDialog.exec() != QPrintDialog::Rejected)
     {
         editor->print(&printer);
         ui->statusBar->showMessage("Printing", 2000);
@@ -553,49 +511,49 @@ void MainWindow::on_actionPrint_triggered()
  * to save the contents of the tab if unsaved. Closes the tab, unless the file is unsaved
  * and the user declines saving. Returns true if the tab was closed and false otherwise.
  */
-bool MainWindow::closeTab(Editor *tabToClose)
+bool MainWindow::closeTab(int index)
 {
     Editor *currentTab = editor;
+    Editor *tabToClose = qobject_cast<Editor*>(tabbedEditor->widget(index));
     bool closingCurrentTab = (tabToClose == currentTab);
 
     // Allow the user to see what tab they're closing if it's not the current one
-    if (!closingCurrentTab)
+    if(!closingCurrentTab)
     {
         tabbedEditor->setCurrentWidget(tabToClose);
     }
 
     // Don't close a tab immediately if it has unsaved contents
-    if (tabToClose->isUnsaved())
+    if(tabToClose->isUnsaved())
     {
         QMessageBox::StandardButton selection = askUserToSave();
 
-        if (selection == QMessageBox::StandardButton::Yes)
+        if(selection == QMessageBox::StandardButton::Yes)
         {
-            bool fileSaved = on_actionSaveTriggered();
+            bool fileSaved = on_actionSave_or_actionSaveAs_triggered();
 
-            if (!fileSaved)
+            if(!fileSaved)
             {
                 return false;
             }
         }
 
-        else if (selection == QMessageBox::Cancel)
+        else if(selection == QMessageBox::Cancel)
         {
             return false;
         }
     }
 
-    int indexOfTabToClose = tabbedEditor->indexOf(tabToClose);
-    tabbedEditor->removeTab(indexOfTabToClose);
+    tabbedEditor->removeTab(index);
 
     // If we closed the last tab, make a new one
-    if (tabbedEditor->count() == 0)
+    if(tabbedEditor->count() == 0)
     {
         on_actionNew_triggered();
     }
 
     // And finally, go back to original tab if the user was closing a different one
-    if (!closingCurrentTab)
+    if(!closingCurrentTab)
     {
         tabbedEditor->setCurrentWidget(currentTab);
     }
@@ -609,57 +567,24 @@ bool MainWindow::closeTab(Editor *tabToClose)
  */
 void MainWindow::on_actionExit_triggered()
 {
-    QVector<Editor*> unsavedTabs = tabbedEditor->unsavedTabs();
-
-    for (Editor *tab : unsavedTabs)
+    while(true)
     {
-        bool userClosedTab = closeTab(tab);
+        bool closed = closeTab(0);
 
-        if (!userClosedTab)
+        if(!closed)
         {
             return;
         }
+
+        // The only time this will happen after a tab close is
+        // if the last one is closed and a new tab is automatically created
+        if(tabbedEditor->count() == 1 && !qobject_cast<Editor*>(tabbedEditor->currentWidget())->isUnsaved())
+        {
+            break;
+        }
     }
 
-    writeSettings();
     QApplication::quit();
-}
-
-
-/* Saves the main application state/settings so they may be
- * restored the next time the application is started. See
- * readSettings and the constructor for more info.
- */
-void MainWindow::writeSettings()
-{
-    settings->setValue(WINDOW_SIZE_KEY, size());
-    settings->setValue(WINDOW_POSITION_KEY, pos());
-    settings->setValue(WINDOW_STATUS_BAR, ui->statusBar->isVisible());
-    settings->setValue(WINDOW_TOOL_BAR, ui->mainToolBar->isVisible());
-}
-
-
-/* Reads the stored app settings and restores them.
- */
-void MainWindow::readSettings()
-{
-    settings->apply(settings->value(WINDOW_SIZE_KEY, QSize(400, 400)),
-                    [=](QVariant setting){ this->resize(setting.toSize()); });
-
-    settings->apply(settings->value(WINDOW_POSITION_KEY, QPoint(200, 200)),
-                    [=](QVariant setting){ this->move(setting.toPoint()); });
-
-    settings->apply(settings->value(WINDOW_STATUS_BAR),
-                    [=](QVariant setting) {
-                        this->ui->statusBar->setVisible(qvariant_cast<bool>(setting));
-                        this->ui->actionStatus_Bar->setChecked(qvariant_cast<bool>(setting));
-                    });
-
-    settings->apply(settings->value(WINDOW_TOOL_BAR),
-                    [=](QVariant setting) {
-                        this->ui->mainToolBar->setVisible(qvariant_cast<bool>(setting));
-                        this->ui->actionTool_Bar->setChecked(qvariant_cast<bool>(setting));
-                    });
 }
 
 
@@ -683,7 +608,7 @@ void MainWindow::toggleRedo(bool redoAvailable)
  */
 void MainWindow::on_actionUndo_triggered()
 {
-    if (ui->actionUndo->isEnabled())
+    if(ui->actionUndo->isEnabled())
     {
         editor->undo();
     }
@@ -694,7 +619,7 @@ void MainWindow::on_actionUndo_triggered()
  */
 void MainWindow::on_actionRedo_triggered()
 {
-    if (ui->actionRedo->isEnabled())
+    if(ui->actionRedo->isEnabled())
     {
         editor->redo();
     }
@@ -714,7 +639,7 @@ void MainWindow::toggleCopyAndCut(bool copyCutAvailable)
  */
 void MainWindow::on_actionCut_triggered()
 {
-    if (ui->actionCut->isEnabled())
+    if(ui->actionCut->isEnabled())
     {
         editor->cut();
     }
@@ -725,7 +650,7 @@ void MainWindow::on_actionCut_triggered()
  */
 void MainWindow::on_actionCopy_triggered()
 {
-    if (ui->actionCopy->isEnabled())
+    if(ui->actionCopy->isEnabled())
     {
         editor->copy();
     }
@@ -779,40 +704,33 @@ void MainWindow::on_actionTime_Date_triggered()
  */
 void MainWindow::on_actionFont_triggered()
 {
-    tabbedEditor->promptFontSelection();
+    editor->launchFontDialog();
 }
 
 
 /* Called when the user selects the Auto Indent option from the Format menu.
+ * Toggles auto indenting in all open tabs.
  */
 void MainWindow::on_actionAuto_Indent_triggered()
 {
-    bool shouldAutoIndent = ui->actionAuto_Indent->isChecked();
-    bool autoIndentToggled = tabbedEditor->applyAutoIndentation(shouldAutoIndent);
-
-    // If the user canceled the operation, reverse the checking
-    if (!autoIndentToggled)
+    for(int i = 0; i < tabbedEditor->count(); i++)
     {
-        ui->actionAuto_Indent->setChecked(!shouldAutoIndent);
+        Editor *tab = qobject_cast<Editor*>(tabbedEditor->widget(i));
+        tab->toggleAutoIndent(ui->actionAuto_Indent->isChecked());
     }
 }
 
 
-/* Called when the user selects the Word Wrap option from the Format menu.
+/* Called when the user selects the Word Wrap option from the Format menu. Toggles
+ * word wrapping in all open tabs.
  */
 void MainWindow::on_actionWord_Wrap_triggered()
 {
-    tabbedEditor->applyWordWrapping(ui->actionWord_Wrap->isChecked());
-}
-
-
-/* Toggles the visibility of the given widget. It is assumed that this
- * widget is part of the main window. Otherwise, the effect may not be seen.
- */
-void MainWindow::toggleVisibilityOf(QWidget *widget)
-{
-    bool opposite = !widget->isVisible();
-    widget->setVisible(opposite);
+    for(int i = 0; i < tabbedEditor->count(); i++)
+    {
+        Editor *tab = qobject_cast<Editor*>(tabbedEditor->widget(i));
+        tab->toggleWrapMode(ui->actionWord_Wrap->isChecked());
+    }
 }
 
 
@@ -820,15 +738,8 @@ void MainWindow::toggleVisibilityOf(QWidget *widget)
  */
 void MainWindow::on_actionStatus_Bar_triggered()
 {
-    toggleVisibilityOf(ui->statusBar);
-}
-
-
-/* Toggles the visibility of the main tool bar
-*/
-void MainWindow::on_actionTool_Bar_triggered()
-{
-    toggleVisibilityOf(ui->mainToolBar);
+    bool oppositeOfCurrentVisibility = !ui->statusBar->isVisible();
+    ui->statusBar->setVisible(oppositeOfCurrentVisibility);
 }
 
 
@@ -841,3 +752,4 @@ void MainWindow::closeEvent(QCloseEvent *event)
     event->ignore();
     on_actionExit_triggered();
 }
+

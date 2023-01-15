@@ -5,8 +5,7 @@
 #include "searchhistory.h"
 #include "documentmetrics.h"
 #include "language.h"
-#include "highlighters/highlighter.h"
-#include "settings.h"
+#include "highlighter.h"
 #include <QPlainTextEdit>
 #include <QFont>
 #include <QMessageBox>
@@ -37,36 +36,27 @@ public:
     inline QString getFileName() { return getFileNameFromPath(); }
     void setCurrentFilePath(QString newPath);
     inline QString getCurrentFilePath() const { return currentFilePath; }
-    void setProgrammingLanguage(Language language);
+    inline void setProgrammingLanguage(Language language);
     inline Language getProgrammingLanguage() const { return programmingLanguage; }
     inline bool isUntitled() const { return fileIsUntitled; }
 
     inline DocumentMetrics getDocumentMetrics() const { return metrics; }
-    QFont getFont() { return font; }
-    void setFont(QFont newFont, QFont::StyleHint styleHint, bool fixedPitch, int tabStopWidth);
+    void launchFontDialog();
+    void setFont(QString family, QFont::StyleHint styleHint, bool fixedPitch, int pointSize, int tabStopWidth);
+    void updateFileMetrics();
 
     inline bool isUnsaved() const { return document()->isModified(); }
     void setModifiedState(bool modified) { document()->setModified(modified); }
 
     void formatSubtext(int startIndex, int endIndex, QTextCharFormat format, bool unformatAllFirst = false);
-    void toggleAutoIndent(bool autoIndent);
-    bool textIsAutoIndented() const { return autoIndentEnabled; }
-    void toggleWrapMode(bool wrap);
-    bool textIsWrapped() const { return lineWrapMode == LineWrapMode::WidgetWidth; }
+    void toggleAutoIndent(bool autoIndent) { autoIndentEnabled = autoIndent; }
+    void toggleWrapMode(bool wrap) { wrap ? setLineWrapMode(LineWrapMode::WidgetWidth) : setLineWrapMode(LineWrapMode::NoWrap); }
 
     inline bool redoAvailable() const { return canRedo; }
     inline bool undoAvailable() const { return canUndo; }
 
     void lineNumberAreaPaintEvent(QPaintEvent *event);
     int getLineNumberAreaWidth();
-
-    void setLineWrapMode(LineWrapMode lineWrapMode);
-
-    const static int DEFAULT_FONT_SIZE = 10;
-    const static int NUM_CHARS_FOR_TAB = 5;
-
-    bool autoIndentEnabled = true;
-    LineWrapMode lineWrapMode = Editor::LineWrapMode::NoWrap;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -75,11 +65,8 @@ protected:
 signals:
     void findResultReady(QString message);
     void gotoResultReady(QString message);
-    void wordCountChanged(int words);
-    void charCountChanged(int chars);
-    void lineCountChanged(int current, int total);
     void columnCountChanged(int col);
-    void fileContentsChanged();
+    void windowNeedsToBeUpdated(DocumentMetrics metrics);
 
 public slots:
     bool find(QString query, bool caseSensitive, bool wholeWords);
@@ -91,8 +78,7 @@ private slots:
     void on_textChanged();
     void updateLineNumberAreaWidth();
     void on_cursorPositionChanged();
-
-    void redrawLineNumberArea(const QRect &rectToBeRedrawn, int numPixelsScrolledVertically);
+    void updateLineNumberArea(const QRect &rectToBeRedrawn, int numPixelsScrolledVertically);
 
     void setUndoAvailable(bool available) { canUndo = available; }
     void setRedoAvailable(bool available) { canRedo = available; }
@@ -101,27 +87,15 @@ private:
     Highlighter *generateHighlighterFor(Language language);
     QString getFileNameFromPath();
     QTextDocument::FindFlags getSearchOptionsFromFlags(bool caseSensitive, bool wholeWords);
-    bool handleEnterKeyPress();
-    bool handleTabKeyPress();
+    bool handleKeyPress(QObject* obj, QEvent* event, int key);
     void moveCursorTo(int positionInText);
-
-    void highlightCurrentLine();
-    void updateWordCount();
-    void updateCharCount();
-    void updateColumnCount();
-    void updateLineCount();
 
     int indentationLevelOfCurrentLine();
     void moveCursorToStartOfCurrentLine();
     void insertTabs(int numTabs);
-    void indentSelection(QTextDocumentFragment selection);
-
-    void writeSettings();
-    void readSettings();
 
     Language programmingLanguage;
     Highlighter *syntaxHighlighter;
-    const static QColor LINE_COLOR;
 
     DocumentMetrics metrics;
     QString currentFilePath;
@@ -134,13 +108,10 @@ private:
     QWidget *lineNumberArea;
     const int lineNumberAreaPadding = 30;
 
+    bool metricCalculationEnabled = true;
+    bool autoIndentEnabled = true;
     bool canRedo = false;
     bool canUndo = false;
-
-    Settings *settings = Settings::instance();
-
-    const QString AUTO_INDENT_KEY = "auto_indent";
-    const QString LINE_WRAP_KEY = "line_wrap";
 };
 
 #endif // EDITOR_H

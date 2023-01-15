@@ -8,7 +8,7 @@ QT       += core gui printsupport
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
-TARGET = Scribe
+TARGET = CustomTextEditor
 TEMPLATE = app
 
 # The following define makes your compiler emit warnings if you use
@@ -25,41 +25,30 @@ DEFINES += QT_DEPRECATED_WARNINGS
 CONFIG += c++11
 
 SOURCES += \
-    highlighters/highlighter.cpp \
-    highlighters/chighlighter.cpp \
-    highlighters/cpphighlighter.cpp \
-    highlighters/javahighlighter.cpp \
-    highlighters/pythonhighlighter.cpp \
-    main.cpp \
-    mainwindow.cpp \
-    finddialog.cpp \
+        main.cpp \
+        mainwindow.cpp \
+        finddialog.cpp \
     editor.cpp \
-    metricreporter.cpp \
-    settings.cpp \
     utilityfunctions.cpp \
     searchhistory.cpp \
     gotodialog.cpp \
     tabbededitor.cpp \
+    highlighter.cpp \
     language.cpp
 
 HEADERS += \
-    highlighters/highlighter.h \
-    highlighters/chighlighter.h \
-    highlighters/cpphighlighter.h \
-    highlighters/javahighlighter.h \
-    highlighters/pythonhighlighter.h \
-    mainwindow.h \
-    documentmetrics.h \
-    finddialog.h \
+        mainwindow.h \
+        documentmetrics.h \
+        finddialog.h \
     editor.h \
     linenumberarea.h \
-    metricreporter.h \
-    settings.h \
     utilityfunctions.h \
     searchhistory.h \
     gotodialog.h \
     tabbededitor.h \
-    language.h
+    highlighter.h \
+    language.h \
+    ui_mainwindow.h
 
 FORMS += \
         mainwindow.ui

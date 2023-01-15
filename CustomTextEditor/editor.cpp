@@ -1,37 +1,30 @@
 #include "editor.h"
 #include "linenumberarea.h"
 #include "utilityfunctions.h"
-#include "highlighters/chighlighter.h"
-#include "highlighters/cpphighlighter.h"
-#include "highlighters/javahighlighter.h"
-#include "highlighters/pythonhighlighter.h"
 #include <QPainter>
 #include <QTextBlock>
 #include <QFontDialog>
 #include <QTextDocumentFragment>
 #include <QPalette>
 #include <QStack>
-#include <QFileInfo>
+#include <QSet>
+#include <QQueue>
 #include <QtDebug>
-
-
-const QColor Editor::LINE_COLOR = QColor(Qt::lightGray).lighter(125);
 
 
 /* Initializes this Editor.
  */
 Editor::Editor(QWidget *parent) : QPlainTextEdit (parent)
 {
-    readSettings();
     document()->setModified(false);
+    setLineWrapMode(QPlainTextEdit::LineWrapMode::NoWrap);
 
     setProgrammingLanguage(Language::None);
     metrics = DocumentMetrics();
     lineNumberArea = new LineNumberArea(this);
-    setFont(QFont("Courier", DEFAULT_FONT_SIZE), QFont::Monospace, true, NUM_CHARS_FOR_TAB);
 
     connect(this, SIGNAL(blockCountChanged(int)), this, SLOT(updateLineNumberAreaWidth()));
-    connect(this, SIGNAL(updateRequest(QRect,int)), this, SLOT(redrawLineNumberArea(QRect,int)));
+    connect(this, SIGNAL(updateRequest(QRect,int)), this, SLOT(updateLineNumberArea(QRect,int)));
     connect(this, SIGNAL(cursorPositionChanged()), this, SLOT(on_cursorPositionChanged()));
     connect(this, SIGNAL(textChanged()), this, SLOT(on_textChanged()));
     connect(this, SIGNAL(undoAvailable(bool)), this, SLOT(setUndoAvailable(bool)));
@@ -48,6 +41,7 @@ Editor::Editor(QWidget *parent) : QPlainTextEdit (parent)
 Editor::~Editor()
 {
     delete lineNumberArea;
+    delete syntaxHighlighter;
 }
 
 
@@ -55,6 +49,7 @@ Editor::~Editor()
  */
 void Editor::reset()
 {
+    metricCalculationEnabled = true;
     currentFilePath.clear();
     document()->setModified(false);
     setPlainText(QString());
@@ -75,32 +70,52 @@ void Editor::setCurrentFilePath(QString newPath)
  */
 QString Editor::getFileNameFromPath()
 {
-    if (currentFilePath.isEmpty())
+    if(currentFilePath.isEmpty())
     {
         fileIsUntitled = true;
         return "Untitled document";
     }
 
-    QFileInfo fileInfo(currentFilePath);
-    return fileInfo.fileName();
+    // Forward slash dependent on the OS, obviously
+    int indexOfLastForwardSlash = currentFilePath.lastIndexOf('/');
+    int lengthOfFileName = currentFilePath.length() - indexOfLastForwardSlash;
+
+    QString fileName = currentFilePath.mid(indexOfLastForwardSlash + 1, lengthOfFileName);
+    return fileName;
+}
+
+
+/* Launches a QFontDialog to allow the user to select a font.
+ */
+void Editor::launchFontDialog()
+{
+    bool userChoseFont;
+    QFont font = QFontDialog::getFont(&userChoseFont, QFont("Courier", 10), this);
+
+    if(userChoseFont)
+    {
+        setFont(font.family(), QFont::Monospace, true, font.pointSize(), 5);
+    }
 }
 
 
 /* Sets the editor's font using the specified parameters.
- * @param newFont - the font to be set
+ * @param family - the name of the font family
  * @param styleHint - used to select an appropriate default font family if the specified one is unavailable.
  * @param fixedPitch - if true, monospace font (equal-width characters)
+ * @param pointSize - the size, in points, of the desired font (e.g., 12 for 12-pt font)
  * @param tabStopWidth - the desired width of a tab in terms of the equivalent number of spaces
  */
-void Editor::setFont(QFont newFont, QFont::StyleHint styleHint, bool fixedPitch, int tabStopWidth)
+void Editor::setFont(QString family, QFont::StyleHint styleHint, bool fixedPitch, int pointSize, int tabStopWidth)
 {
-    font = newFont;
+    font.setFamily(family);
     font.setStyleHint(styleHint);
     font.setFixedPitch(fixedPitch);
+    font.setPointSize(pointSize);
     QPlainTextEdit::setFont(font);
 
     QFontMetrics metrics(font);
-    setTabStopDistance(tabStopWidth * metrics.width(' '));
+    setTabStopWidth(tabStopWidth * metrics.width(' '));
 }
 
 
@@ -110,7 +125,7 @@ void Editor::setFont(QFont newFont, QFont::StyleHint styleHint, bool fixedPitch,
  */
 void Editor::setProgrammingLanguage(Language language)
 {
-    if (language == this->programmingLanguage)
+    if(language == this->programmingLanguage)
     {
         return;
     }
@@ -130,10 +145,10 @@ Highlighter *Editor::generateHighlighterFor(Language language)
 
     switch (language)
     {
-        case (Language::C): return new CHighlighter(doc);
-        case (Language::CPP): return new CPPHighlighter(doc);
-        case (Language::Java): return new JavaHighlighter(doc);
-        case (Language::Python): return new PythonHighlighter(doc);
+        case(Language::C): return cHighlighter(doc);
+        case(Language::CPP): return cppHighlighter(doc);
+        case(Language::Java): return javaHighlighter(doc);
+        case(Language::Python): return pythonHighlighter(doc);
         default: return nullptr;
     }
 }
@@ -146,11 +161,11 @@ Highlighter *Editor::generateHighlighterFor(Language language)
 QTextDocument::FindFlags Editor::getSearchOptionsFromFlags(bool caseSensitive, bool wholeWords)
 {
     QTextDocument::FindFlags searchOptions = QTextDocument::FindFlags();
-    if (caseSensitive)
+    if(caseSensitive)
     {
         searchOptions |= QTextDocument::FindCaseSensitively;
     }
-    if (wholeWords)
+    if(wholeWords)
     {
         searchOptions |= QTextDocument::FindWholeWords;
     }
@@ -179,21 +194,21 @@ bool Editor::find(QString query, bool caseSensitive, bool wholeWords)
     bool matchFound = QPlainTextEdit::find(query, searchOptions);
 
     // If we didn't find a match, search from the top of the document
-    if (!matchFound)
+    if(!matchFound)
     {
         moveCursor(QTextCursor::Start);
         matchFound = QPlainTextEdit::find(query, searchOptions);
     }
 
     // If we found a match...
-    if (matchFound)
+    if(matchFound)
     {
         int foundPosition = textCursor().position();
         bool previouslyFound = searchHistory.previouslyFound(query);
 
         // If it's the first time finding this, log the first position at which this query was found in the current document state
         // Search history is always reset whenever we do a full cycle back to the first match or start a new search "chain"
-        if (!previouslyFound)
+        if(!previouslyFound)
         {
             searchHistory.add(query, cursorPositionBeforeCurrentSearch, foundPosition);
         }
@@ -202,7 +217,7 @@ bool Editor::find(QString query, bool caseSensitive, bool wholeWords)
         {
             bool loopedBackToFirstMatch = foundPosition == searchHistory.firstFoundAt(query);
 
-            if (loopedBackToFirstMatch)
+            if(loopedBackToFirstMatch)
             {
                 // It's not really a match that we found; it's a repeat of the very first-ever match
                 matchFound = false;
@@ -215,7 +230,7 @@ bool Editor::find(QString query, bool caseSensitive, bool wholeWords)
                 searchHistory.clear();
 
                 // Inform the user of the unsuccessful search (note the "no MORE results found")
-                emit(findResultReady("No more results found."));
+                emit(("No more results found."));
             }
         }
     }
@@ -242,7 +257,7 @@ void Editor::replace(QString what, QString with, bool caseSensitive, bool wholeW
 {
     bool found = find(what, caseSensitive, wholeWords);
 
-    if (found)
+    if(found)
     {
         QTextCursor cursor = textCursor();
         cursor.beginEditBlock();
@@ -261,8 +276,7 @@ void Editor::replace(QString what, QString with, bool caseSensitive, bool wholeW
 void Editor::replaceAll(QString what, QString with, bool caseSensitive, bool wholeWords)
 {
     // Optimization, don't update screen until the end of all replacements
-    disconnect(this, SIGNAL(cursorPositionChanged()), this, SLOT(on_cursorPositionChanged()));
-    disconnect(this, SIGNAL(textChanged()), this, SLOT(on_textChanged()));
+    metricCalculationEnabled = false;
 
     // Search the entire document from the very beginning
     moveCursorTo(0);
@@ -275,7 +289,7 @@ void Editor::replaceAll(QString what, QString with, bool caseSensitive, bool who
     // Keep replacing while there are matches left
     QTextCursor cursor(document());
     cursor.beginEditBlock();
-    while (found)
+    while(found)
     {
         QTextCursor currentPosition = textCursor();
         currentPosition.insertText(with);
@@ -285,7 +299,7 @@ void Editor::replaceAll(QString what, QString with, bool caseSensitive, bool who
     cursor.endEditBlock();
 
     // End-of-operation feedback
-    if (replacements == 0)
+    if(replacements == 0)
     {
         emit(findResultReady("No results found."));
     }
@@ -294,11 +308,9 @@ void Editor::replaceAll(QString what, QString with, bool caseSensitive, bool who
         emit(findResultReady("Document searched. Replaced " + QString::number(replacements) + " instances."));
     }
 
-    // Reset here and calculate the metrics in one go
-    connect(this, SIGNAL(cursorPositionChanged()), this, SLOT(on_cursorPositionChanged()));
-    connect(this, SIGNAL(textChanged()), this, SLOT(on_textChanged()));
-    on_cursorPositionChanged();
-    on_textChanged();
+    metricCalculationEnabled = true; // reset here
+    updateFileMetrics();
+    emit(windowNeedsToBeUpdated(metrics));
 }
 
 
@@ -306,7 +318,7 @@ void Editor::replaceAll(QString what, QString with, bool caseSensitive, bool who
  */
 void Editor::goTo(int line)
 {
-    if (line > blockCount() || line < 1)
+    if(line > blockCount() || line < 1)
     {
         emit(gotoResultReady("Invalid line number."));
         return;
@@ -330,7 +342,7 @@ void Editor::formatSubtext(int startIndex, int endIndex, QTextCharFormat format,
     QTextCursor cursorBeforeFormatting = textCursor();
     QTextCursor formatter = textCursor();
 
-    if (unformatAllFirst)
+    if(unformatAllFirst)
     {
         QTextCursor unformatter = textCursor();
         unformatter.setPosition(0, QTextCursor::MoveAnchor);
@@ -349,77 +361,28 @@ void Editor::formatSubtext(int startIndex, int endIndex, QTextCharFormat format,
 }
 
 
-/* Sets the Editor's line wrap mode to the given value.
+/* Scans the entire document character by character and tallies the number of
+ * characters and words and storing the counts internally for reporting.
+ * Note: column counting is handled by highlightCurrentLine.
  */
-void Editor::setLineWrapMode(LineWrapMode lineWrapMode)
+void Editor::updateFileMetrics()
 {
-    QPlainTextEdit::setLineWrapMode(lineWrapMode);
-    this->lineWrapMode = lineWrapMode;
-}
-
-
-/* Used to toggle the Editor's auto indentation mode (on/off).
- */
-void Editor::toggleAutoIndent(bool autoIndent)
-{
-    autoIndentEnabled = autoIndent;
-
-    // Update the setting in case any new tabs are opened later
-    settings->setValue(AUTO_INDENT_KEY, autoIndentEnabled);
-}
-
-
-/* Used to toggle the Editor's line wrap mode (wrapping or no wrapping).
- * @param wrap - flag denoting whether text should wrap (true) or not (false)
- */
-void Editor::toggleWrapMode(bool wrap)
-{
-    if (wrap)
-    {
-        setLineWrapMode(LineWrapMode::WidgetWidth);
-    }
-    else
-    {
-        setLineWrapMode(LineWrapMode::NoWrap);
-    }
-
-    // Update the setting in case any new tabs are opened later
-    settings->setValue(LINE_WRAP_KEY, lineWrapMode);
-}
-
-
-/* Called whenever the contents of the text editor change. Resets this
- * Editor's search history, updates the char count, and emits a signal
- * so that other entities (MainWindow) can update their content accordingly.
- */
-void Editor::on_textChanged()
-{
-    searchHistory.clear();
-    updateCharCount();
-    updateWordCount();
-    emit(fileContentsChanged());
-}
-
-
-/* Manually parses the document to update the word count. Emits the word count.
- */
-void Editor::updateWordCount()
-{
-    metrics.wordCount = 0;
     QString documentContents = toPlainText().toUtf8();
     int documentLength = documentContents.length();
+    metrics = DocumentMetrics();
     QString currentWord = "";
 
-    for (int i = 0; i < documentLength; i++)
+    // Loop through each character in the document
+    for(int i = 0; i < documentLength; i++)
     {
         // Convert to unsigned char to avoid running into debug assertion problems
-        unsigned char character = qvariant_cast<unsigned char>(documentContents[i].toLatin1());
+        unsigned char currentCharacter = qvariant_cast<unsigned char>(documentContents[i].toLatin1());
 
         // Newline
-        if (character == '\n')
+        if(currentCharacter == '\n')
         {
             // Special case: newline following a word
-            if (!currentWord.isEmpty())
+            if(!currentWord.isEmpty())
             {
                 metrics.wordCount++;
                 currentWord.clear();
@@ -428,41 +391,54 @@ void Editor::updateWordCount()
         // All other valid characters
         else
         {
+            metrics.charCount++;
+
             // Alphanumeric character
-            if (isalnum(character))
+            if(isalnum(currentCharacter))
             {
-                currentWord += qvariant_cast<char>(character);
+                currentWord += qvariant_cast<char>(currentCharacter);
             }
             // Whitespace (excluding newline, handled separately above)
-            else if (isspace(character))
+            else if(isspace(currentCharacter))
             {
                 // Whitespace following a word means we completed a word
-                if (!currentWord.isEmpty())
+                if(!currentWord.isEmpty())
                 {
                     metrics.wordCount++;
                     currentWord.clear();
+                }
+                // Consume all other instances of whitespace
+                else
+                {
+                    while(i + 1 < documentLength &&
+                          isspace(qvariant_cast<unsigned char>(documentContents[i + 1].toLatin1())))
+                    {
+                        i++;
+                    }
                 }
             }
         }
     }
 
     // e.g., if we stopped typing and still had a word in progress, we need to count it
-    if (!currentWord.isEmpty())
+    if(!currentWord.isEmpty())
     {
         metrics.wordCount++;
         currentWord.clear();
     }
-
-    emit(wordCountChanged(metrics.wordCount));
 }
 
 
-/* Updates and emits the char count.
+/* Called whenever the contents of the text editor change, even if they are deleted
+ * and restored to their original state. Marks the document as needing to be saved
+ * and updates the file metrics. Emits the windowNeedsToBeUpdated signal when it's done
+ * to direct its parent window to update any information it displays to the user.
  */
-void Editor::updateCharCount()
+void Editor::on_textChanged()
 {
-    metrics.charCount = toPlainText().length();
-    emit(charCountChanged(metrics.charCount));
+    searchHistory.clear();
+    updateFileMetrics();
+    emit(windowNeedsToBeUpdated(metrics));
 }
 
 
@@ -477,14 +453,14 @@ int Editor::indentationLevelOfCurrentLine()
     int indentationLevel = 0;
 
     int index = textCursor().position();
-    if (index >= documentContents.length())
+    if(index >= documentContents.length())
     {
         index--;
     }
 
-    while (index < documentContents.length())
+    while(index < documentContents.length())
     {
-        if (documentContents.at(index) == '\t')
+        if(documentContents.at(index) == '\t')
         {
             indentationLevel++;
             index++;
@@ -504,7 +480,7 @@ int Editor::indentationLevelOfCurrentLine()
  */
 void Editor::insertTabs(int numTabs)
 {
-    for (int i = 0; i < numTabs; i++)
+    for(int i = 0; i < numTabs; i++)
     {
         insertPlainText("\t");
     }
@@ -522,29 +498,94 @@ void Editor::moveCursorToStartOfCurrentLine()
         cursor.movePosition(QTextCursor::Left);
         setTextCursor(cursor);
     }
-    while (metrics.currentColumn != 1);
+    while(metrics.currentColumn != 1);
 }
 
 
-/* Indents the selected text, if the cursor has a selection.
- * Returns true if it succeeds and false otherwise.
+/* Called when a user presses a key. Used to handle special formatting.
  */
-void Editor::indentSelection(QTextDocumentFragment selection)
+bool Editor::handleKeyPress(QObject* obj, QEvent* event, int key)
 {
-    QString text = selection.toPlainText();
-
-    text.insert(0, '\t');
-    for (int i = 1; i < text.length(); i++)
+    // Auto-indenting after ENTER
+    if(key == Qt::Key_Enter || key == Qt::Key_Return)
     {
-        // Insert a tab after each newline
-        if (text.at(i) == '\n' && i + 1 < text.length())
+        QString documentContents = document()->toPlainText();
+        int indexToLeftOfCursor = textCursor().position() - 1;
+
+        if(autoIndentEnabled &&
+           documentContents.length() >= 1 &&
+           indexToLeftOfCursor >= 0 &&
+           indexToLeftOfCursor < documentContents.length())
         {
-            text.insert(i + 1, '\t');
+            QChar character = documentContents.at(indexToLeftOfCursor);
+
+            // Hit ENTER after opening brace
+            if(character == '{')
+            {
+                bool notPaired = Utility::closingBraceNeeded(documentContents);
+
+                int braceLevel = indentationLevelOfCurrentLine();
+                insertPlainText("\n");
+                insertTabs(braceLevel + 1);
+
+                if(notPaired)
+                {
+                    insertPlainText("\n");
+                    insertTabs(braceLevel);
+                    insertPlainText("}");
+
+                    // Set the cursor so it's right after the nested tab
+                    moveCursorTo(textCursor().position() - 2 - braceLevel);
+                }
+
+                return true;
+            }
+            // Hit ENTER after colon (for Python only)
+            else if(character == ':' && programmingLanguage == Language::Python)
+            {
+                int level = indentationLevelOfCurrentLine();
+                insertPlainText("\n");
+                insertTabs(level + 1);
+                return true;
+            }
+            // Hit ENTER after anything else
+            else
+            {
+                int indentationLevel = indentationLevelOfCurrentLine();
+                insertPlainText("\n");
+                insertTabs(indentationLevel);
+                return true;
+            }
         }
     }
 
-    // Replace the selection with the new tabbed text
-    insertPlainText(text);
+    // Indenting selections of text
+    else if(key == Qt::Key_Tab)
+    {
+        if(textCursor().hasSelection())
+        {
+            QString text = textCursor().selection().toPlainText();
+
+            text.insert(0, '\t');
+            for(int i = 1; i < text.length(); i++)
+            {
+                // Insert a tab after each newline
+                if(text.at(i) == '\n' && i + 1 < text.length())
+                {
+                    text.insert(i + 1, '\t');
+                }
+            }
+
+            // Replace the selection with the new tabbed text
+            insertPlainText(text);
+            return true;
+        }
+    }
+    // Process anything else normally
+    else
+    {
+        return QObject::eventFilter(obj, event);
+    }
 }
 
 
@@ -558,134 +599,25 @@ void Editor::moveCursorTo(int positionInText)
 }
 
 
-bool Editor::handleEnterKeyPress()
-{
-    QString documentContents = document()->toPlainText();
-    int indexToLeftOfCursor = textCursor().position() - 1;
-
-    // Edge cases
-    if (documentContents.length() < 1 ||
-        indexToLeftOfCursor < 0 ||
-        indexToLeftOfCursor >= documentContents.length())
-    {
-        return false;
-    }
-
-    int currentIndent = indentationLevelOfCurrentLine();
-    QChar characterToLeftOfCursor = documentContents.at(indexToLeftOfCursor);
-
-    // Did the user hit ENTER right after a code block start, like an opening brace in C++?
-    if (syntaxHighlighter && characterToLeftOfCursor == syntaxHighlighter->getCodeBlockStartDelimiter())
-    {
-        QChar codeBlockStartDelimiter = syntaxHighlighter->getCodeBlockStartDelimiter();
-        QChar codeBlockEndDelimiter = syntaxHighlighter->getCodeBlockEndDelimiter();
-
-        insertPlainText("\n");
-        if (autoIndentEnabled)
-        {
-            insertTabs(currentIndent + 1);
-        }
-
-        // Note: Some languages, like Python, don't have a code block end delimiter.
-        if (codeBlockEndDelimiter != NULL &&
-            Utility::codeBlockNotClosed(documentContents, codeBlockStartDelimiter, codeBlockEndDelimiter))
-        {
-            insertPlainText("\n");
-            insertTabs(currentIndent);
-            insertPlainText(codeBlockEndDelimiter);
-
-            // Set the cursor so it's right after the nested tab
-            moveCursorTo(textCursor().position() - 2 - currentIndent);
-        }
-
-        return true;
-    }
-
-    // If the user hit ENTER after anything else, just take them to the next line but at the current indentation level
-    else
-    {
-        insertPlainText("\n");
-        if (autoIndentEnabled)
-        {
-            insertTabs(currentIndent);
-        }
-
-        return true;
-    }
-}
-
-
-/* Defines all the logic for what should happen when a user presses tab.
- * Currently, the only thing the editor will check for is if tab was
- * pressed while text was highlighted. If so, the text will be indented.
- */
-bool Editor::handleTabKeyPress()
-{
-    if (textCursor().hasSelection())
-    {
-        indentSelection(textCursor().selection());
-        return true;
-    }
-
-    return false;
-}
-
-
 /* Custom handler for events. Used to handle the case of Enter being pressed after an opening brace
  * or the tab key being used on a selection of text.
  */
 bool Editor::eventFilter(QObject* obj, QEvent* event)
 {
-    if (event->type() == QEvent::KeyPress)
+    bool isKeyPress = event->type() == QEvent::KeyPress;
+
+    if(isKeyPress)
     {
         int key = static_cast<QKeyEvent*>(event)->key();
 
-        if (key == Qt::Key_Enter || key == Qt::Key_Return)
-        {
-            return handleEnterKeyPress();
-        }
-        else if (key == Qt::Key_Tab)
-        {
-            return handleTabKeyPress();
-        }
-        else
-        {
-            return QObject::eventFilter(obj, event);
-        }
+        return handleKeyPress(obj, event, key);
     }
     else
     {
         return QObject::eventFilter(obj, event);
     }
-}
 
-
-/* Preserves current settings for the editor so they can be
- * persisted into the next execution.
- */
-void Editor::writeSettings()
-{
-    settings->setValue(LINE_WRAP_KEY, lineWrapMode);
-    settings->setValue(AUTO_INDENT_KEY, autoIndentEnabled);
-}
-
-
-/* Loads previously saved settings for the editor.
- */
-void Editor::readSettings()
-{
-    settings->apply(settings->value(LINE_WRAP_KEY),
-                                [=](QVariant setting){
-                                    LineWrapMode wrap = qvariant_cast<LineWrapMode>(setting);
-                                    this->setLineWrapMode(wrap);
-                                }
-    );
-
-    settings->apply(settings->value(AUTO_INDENT_KEY),
-                                [=](QVariant setting){
-                                    this->autoIndentEnabled = qvariant_cast<bool>(setting);
-                                }
-    );
+    return false;
 }
 
 
@@ -719,19 +651,23 @@ void Editor::updateLineNumberAreaWidth()
 
 /* Called when the editor viewport is scrolled. Redraws the line number area accordingly.
  */
-void Editor::redrawLineNumberArea(const QRect &rectToBeRedrawn, int numPixelsScrolledVertically)
+void Editor::updateLineNumberArea(const QRect &rectToBeRedrawn, int numPixelsScrolledVertically)
 {
-    if (numPixelsScrolledVertically != 0)
+    QTextStream qout(stdout);
+    qout<<numPixelsScrolledVertically<<endl;
+    if(numPixelsScrolledVertically != 0)
     {
         lineNumberArea->scroll(0, numPixelsScrolledVertically);
     }
     else
     {
+        qout<<"zero"<<endl;
         lineNumberArea->update(0, rectToBeRedrawn.y(), lineNumberArea->width(), rectToBeRedrawn.height());
     }
-
-    if (rectToBeRedrawn.contains(viewport()->rect()))
+    qout<<rectToBeRedrawn.height()<<endl;
+    if(rectToBeRedrawn.contains(viewport()->rect()))
     {
+        qout<<"haha"<<endl;
         updateLineNumberAreaWidth();
     }
 }
@@ -748,50 +684,31 @@ void Editor::resizeEvent(QResizeEvent *event)
 }
 
 
-/* Called when the cursor changes position.
+/* Called when the cursor changes position. Highlights the line the cursor is on.
+ * Also computes the current column within that line.
  */
 void Editor::on_cursorPositionChanged()
-{
-    highlightCurrentLine();
-    updateLineCount();
-    updateColumnCount();
-}
-
-
-/* Updates and emits the line count (current and total).
- */
-void Editor::updateLineCount()
-{
-    metrics.currentLine = textCursor().blockNumber() + 1;
-    metrics.totalLines = document()->lineCount();
-    emit(lineCountChanged(metrics.currentLine, metrics.totalLines));
-}
-
-
-/* Updates and emits the column count.
- */
-void Editor::updateColumnCount()
-{
-    metrics.currentColumn = textCursor().positionInBlock() + 1;
-    emit(columnCountChanged(metrics.currentColumn));
-}
-
-
-/* Highlights the current line. See on_cursorPositionChanged() for invocation.
- */
-void Editor::highlightCurrentLine()
 {
     QList<QTextEdit::ExtraSelection> extraSelections;
     if (!isReadOnly())
     {
        QTextEdit::ExtraSelection selection;
-       selection.format.setBackground(LINE_COLOR);
+       QColor lineColor = QColor(Qt::lightGray).lighter(125);
+
+       selection.format.setBackground(lineColor);
        selection.format.setProperty(QTextFormat::FullWidthSelection, true);
        selection.cursor = textCursor();
        selection.cursor.clearSelection();
        extraSelections.append(selection);
     }
     setExtraSelections(extraSelections);
+
+    // When the cursor position changes, the column changes, so we need to update that
+    if(metricCalculationEnabled)
+    {
+        metrics.currentColumn = textCursor().positionInBlock() + 1;
+        emit(columnCountChanged(metrics.currentColumn));
+    }
 }
 
 

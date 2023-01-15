@@ -1,0 +1,15 @@
+{
+    "configurations": [
+        {
+            "name": "qt",
+            "includePath": [
+                "c:/Qt/qt59/5.9/mingw53_32/include/**",
+                "${workspaceRoot}/**"
+            ],
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "configurationProvider": "ms-vscode.makefile-tools"
+        }
+    ],
+    "version": 4
+}

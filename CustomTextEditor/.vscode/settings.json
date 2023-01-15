@@ -1,0 +1,6 @@
+{
+    "qtConfigure.qtKitDir": "c:/Qt/qt59/5.9/mingw53_32",
+    "files.associations": {
+        "qfont": "cpp"
+    }
+}
